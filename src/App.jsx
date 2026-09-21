@@ -61,6 +61,65 @@ function useTicker(active) {
   }, [active]);
 }
 
+const PAGE_SIZE = 15;
+
+// Remembers the current page per list (storageKey) across reloads. Sort
+// happens in the caller BEFORE this slices — pagination must never
+// reorder, only window into whatever order was already decided (active
+// tasks on top, etc). localStorage is shared across all ikorka-* panels
+// on the same GitHub Pages origin, so storageKey must be app+tab
+// specific (e.g. "ikorka_coo_assigned_page"), same convention as the
+// existing PIN/role keys.
+function usePagedList(items, storageKey) {
+  const [page, setPage] = useState(() => {
+    const saved = parseInt(localStorage.getItem(storageKey) || "1", 10);
+    return Number.isFinite(saved) && saved > 0 ? saved : 1;
+  });
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [totalPages]);
+  useEffect(() => {
+    localStorage.setItem(storageKey, String(page));
+  }, [page, storageKey]);
+  const pageItems = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  return { page, setPage, totalPages, pageItems };
+}
+
+function Pagination({ page, totalPages, setPage }) {
+  if (totalPages <= 1) return null;
+  // Windowed page numbers (first, last, current ± 1) so a long history
+  // of "Завершено" tasks doesn't turn this into a wall of buttons.
+  const nums = [];
+  for (let n = 1; n <= totalPages; n++) {
+    if (n === 1 || n === totalPages || Math.abs(n - page) <= 1) nums.push(n);
+    else if (nums[nums.length - 1] !== "…") nums.push("…");
+  }
+  const btn = (active) => ({
+    ...btnStyle(active ? T.accent : T.sub, !active),
+    minWidth: 30,
+    justifyContent: "center",
+    padding: "5px 9px",
+  });
+  return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, marginTop: 14 }}>
+      <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} style={btn(false)}>
+        <ChevronLeft size={14} />
+      </button>
+      {nums.map((n, i) =>
+        n === "…" ? (
+          <span key={`e${i}`} style={{ color: T.sub, padding: "0 2px" }}>…</span>
+        ) : (
+          <button key={n} onClick={() => setPage(n)} style={btn(n === page)}>{n}</button>
+        )
+      )}
+      <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} style={btn(false)}>
+        <ChevronRight size={14} />
+      </button>
+    </div>
+  );
+}
+
 function Pill({ color, children }) {
   return (
     <span
@@ -208,8 +267,10 @@ function DailyTab({ items, reload }) {
   const doneCount = items.filter((i) => i.done).length;
   // Unfinished on top, done at the bottom — recomputed from `items` on
   // every render, so toggling a checkbox (which triggers reload()) moves
-  // it immediately without any extra state to keep in sync.
+  // it immediately without any extra state to keep in sync. Pagination
+  // slices AFTER this sort, so it never disturbs the ordering.
   const sortedItems = [...items].sort((a, b) => (a.done === b.done ? 0 : a.done ? 1 : -1));
+  const { page, setPage, totalPages, pageItems } = usePagedList(sortedItems, "ikorka_coo_daily_page");
   return (
     <div style={{ padding: 20, maxWidth: 640 }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -224,7 +285,7 @@ function DailyTab({ items, reload }) {
       </div>
       <div style={{ color: T.sub, fontSize: 12, marginBottom: 10 }}>{doneCount} з {items.length} виконано</div>
       <div style={panelStyle}>
-        {sortedItems.map((item, idx) => (
+        {pageItems.map((item, idx) => (
           <div key={item.id} style={{ ...rowStyle, borderTop: idx > 0 ? `1px solid ${T.border}` : "none", gap: 10 }}>
             <input type="checkbox" checked={item.done} onChange={() => toggle(item)} />
             {editingId === item.id ? (
@@ -263,6 +324,7 @@ function DailyTab({ items, reload }) {
         ))}
         {items.length === 0 && <div style={{ padding: 16, color: T.sub, fontSize: 13 }}>Задач на сьогодні ще немає.</div>}
       </div>
+      <Pagination page={page} totalPages={totalPages} setPage={setPage} />
     </div>
   );
 }
@@ -332,6 +394,11 @@ function AssignedTab({ items, reload }) {
     active: { label: "В роботі", color: T.amber },
     done: { label: "Завершено", color: T.accent },
   };
+  // Active work stays on top regardless of when it was created; done
+  // tasks sink to the bottom. Pagination slices AFTER this sort.
+  const STATUS_ORDER = ["active", "queued", "done"];
+  const sortedItems = [...items].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
+  const { page, setPage, totalPages, pageItems } = usePagedList(sortedItems, "ikorka_coo_assigned_page");
 
   return (
     <div style={{ padding: 20, maxWidth: 760 }}>
@@ -354,7 +421,7 @@ function AssignedTab({ items, reload }) {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {items.map((task) => {
+        {pageItems.map((task) => {
           const meta = statusMeta[task.status];
           const dur = fmtDuration(task.started_at, task.finished_at);
           return (
@@ -437,6 +504,7 @@ function AssignedTab({ items, reload }) {
         })}
         {items.length === 0 && <div style={{ ...panelStyle, padding: 16, color: T.sub, fontSize: 13 }}>Задач ще немає.</div>}
       </div>
+      <Pagination page={page} totalPages={totalPages} setPage={setPage} />
     </div>
   );
 }
